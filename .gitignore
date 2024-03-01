@@ -1,0 +1,8 @@
+build.*
+!build.c
+!build.h
+
+ping_pong
+*raylib*
+
+compile_flags.txt
