@@ -30,8 +30,8 @@
 #define MIN_BALL_SPEED BALL_SPEED
 #define BALL_SIDES (int)(WINDOW_SIDE / 13.33f)
 
-#define BACKGROUND_COLOR CLITERAL(Color){ 0, 37, 14, 255 }
-#define MAIN_UI_COLOR GOLD
+#define BACKGROUND_COLOR CLITERAL(Color){ 30, 20, 40, 255 }// CLITERAL(Color){ 0, 37, 14, 255 }
+#define MAIN_UI_COLOR PURPLE
 
 typedef struct {
   Rectangle rect;
@@ -59,6 +59,7 @@ struct GameContext {
   UdpSocket server_sock;
   UdpSocket client_sock;
   int pressed_key[2];
+  bool is_paused;
 };
 
 typedef enum {
@@ -415,13 +416,7 @@ static void game_local_update(GameContext *ctx, float dt) {
 
 static void game_draw_ui(GameContext *ctx, float dt) {
   char buf[1024] = {0};
-  int score_font_size = 40;
   int stats_font_size = 14;
-
-  sprintf(buf, "%d : %d", ctx->scores[0], ctx->scores[1]);
-  int score_width = MeasureText(buf, score_font_size);
-  int score_center_x = (WINDOW_WIDTH - score_width) / 2;
-  DrawText(buf, score_center_x, 30, score_font_size, MAIN_UI_COLOR);
 
   sprintf(buf, "Speed: %.0f", ctx->paddles[0].speed);
   DrawText(buf, 30, WINDOW_HEIGHT - 30, stats_font_size, MAIN_UI_COLOR);
@@ -437,10 +432,56 @@ static void game_draw_ui(GameContext *ctx, float dt) {
   DrawText(buf, ball_center_x, WINDOW_HEIGHT - 30, stats_font_size, MAIN_UI_COLOR);
 
   sprintf(buf, "FPS: %d", GetFPS());
-  DrawText(buf, 30, 30, stats_font_size, MAIN_UI_COLOR);
+  int fps_width = MeasureText(buf, stats_font_size);
+  DrawText(buf, WINDOW_WIDTH - fps_width - 60, 30, stats_font_size, MAIN_UI_COLOR);
+}
+
+static void draw_score(GameContext *ctx, float dt) {
+  char buf[1024] = {0};
+  int score_font_size = 150;
+
+  Color color = MAIN_UI_COLOR;
+  color.a = 70;
+
+  sprintf(buf, "%d", ctx->scores[0]);
+  int score_width = MeasureText(buf, score_font_size);
+  int score_center_x = (WINDOW_WIDTH - score_width) / 4;
+  DrawText(buf, score_center_x, (WINDOW_HEIGHT - score_font_size) / 2, score_font_size, color);
+
+  sprintf(buf, "%d", ctx->scores[1]);
+  score_width = MeasureText(buf, score_font_size);
+  score_center_x = WINDOW_WIDTH - (WINDOW_WIDTH - score_width) / 4 - score_width;
+  DrawText(buf, score_center_x, (WINDOW_HEIGHT - score_font_size) / 2, score_font_size, color);
+}
+
+#define MAX_TAIL_SIZE 15
+
+static void draw_tail(GameContext *ctx, Vector2 tail[MAX_TAIL_SIZE], size_t *p_begin, size_t *p_len) {
+  if (!ctx->is_paused) {
+    tail[*p_begin] = (Vector2){ ctx->ball.rect.x + ctx->ball.rect.width / 2, ctx->ball.rect.y + ctx->ball.rect.height / 2 };
+    *p_begin = (*p_begin + 1) % MAX_TAIL_SIZE;
+    *p_len += *p_len != MAX_TAIL_SIZE;
+  }
+
+  size_t step = MAX_TAIL_SIZE / 5;
+
+  for (
+    size_t curr = *p_begin, i = 0; 
+    i < *p_len; 
+    curr = (curr + step) % MAX_TAIL_SIZE, i += step
+  ) {
+    Color color = ctx->ball.color;
+    color.a = Lerp(color.a, 0, 1 - (float)i / MAX_TAIL_SIZE);
+    float w = Lerp(ctx->ball.rect.width, ctx->ball.rect.width / MAX_TAIL_SIZE, 1 - (float)i / MAX_TAIL_SIZE);
+    float h = Lerp(ctx->ball.rect.height, ctx->ball.rect.height / MAX_TAIL_SIZE, 1 - (float)i / MAX_TAIL_SIZE);
+    DrawRectangleLines(tail[curr].x - w / 2, tail[curr].y - h / 2, w, h, color);
+  }
 }
 
 static void game_draw_frame(GameContext *ctx, float dt) {
+  static Vector2 tail[MAX_TAIL_SIZE] = {0};
+  static size_t tail_begin = 0;
+  static size_t tail_len = 0;
 
   Rectangle middle_line = {0};
   middle_line.width = 5;
@@ -451,10 +492,16 @@ static void game_draw_frame(GameContext *ctx, float dt) {
   BeginDrawing();
 
   ClearBackground(BACKGROUND_COLOR);
+
+  draw_score(ctx, dt);
+
+  float line_thickness = 2;
   DrawRectangleRec(middle_line, CLITERAL(Color){ 255, 255, 255, 100 });
-  DrawRectangleRec(ctx->paddles[0].rect, ctx->paddles[0].color);
-  DrawRectangleRec(ctx->paddles[1].rect, ctx->paddles[1].color);
-  DrawRectangleRec(ctx->ball.rect, ctx->ball.color);
+  DrawRectangleLinesEx(ctx->paddles[0].rect, line_thickness, ctx->paddles[0].color);
+  DrawRectangleLinesEx(ctx->paddles[1].rect, line_thickness, ctx->paddles[1].color);
+  DrawRectangleLinesEx(ctx->ball.rect, line_thickness, ctx->ball.color);
+
+  draw_tail(ctx, tail, &tail_begin, &tail_len);
 
   game_draw_ui(ctx, dt);
   
@@ -482,8 +529,14 @@ int main(int argc, char **argv)
   while (!WindowShouldClose()) {
     float dt = GetFrameTime();
 
-    handle_input(&ctx, dt);
-    ctx.update(&ctx, dt);
+    if (IsKeyPressed(KEY_SPACE)) {
+      ctx.is_paused = !ctx.is_paused;
+    } 
+
+    if (!ctx.is_paused) {
+      handle_input(&ctx, dt);
+      ctx.update(&ctx, dt);
+    }
     game_draw_frame(&ctx, dt);
   }
 
