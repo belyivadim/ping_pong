@@ -30,6 +30,10 @@
 #define MIN_BALL_SPEED BALL_SPEED
 #define BALL_SIDES (int)(WINDOW_SIDE / 13.33f)
 
+#define TAIL_CAPACITY_BALL 15
+#define TAIL_CAPACITY_PADDLE 24
+#define TAIL_STRUCT(size) Vector2 tail[(size)]; int tail_begin; int tail_len
+
 #define BACKGROUND_COLOR CLITERAL(Color){ 30, 20, 40, 255 }// CLITERAL(Color){ 0, 37, 14, 255 }
 #define MAIN_UI_COLOR PURPLE
 
@@ -38,6 +42,7 @@ typedef struct {
   Color color;
   float speed;
   Vector2 direction;
+  TAIL_STRUCT(TAIL_CAPACITY_PADDLE);
 } Paddle;
 
 typedef struct {
@@ -46,6 +51,7 @@ typedef struct {
   float speed;
   float spin_factor;
   Vector2 direction;
+  TAIL_STRUCT(TAIL_CAPACITY_BALL);
 } Ball;
 
 typedef struct GameContext GameContext;
@@ -179,7 +185,7 @@ static GameContext game_init(const CmdConfig *p_cfg) {
       .width = PADDLE_WIDTH, 
       .height = PADDLE_HEIGHT 
     },
-    .color = BLUE,
+    .color = SKYBLUE,
     .speed = PADDLE_SPEED,
     .direction = {0}
   };
@@ -191,7 +197,7 @@ static GameContext game_init(const CmdConfig *p_cfg) {
       .width = PADDLE_WIDTH, 
       .height = PADDLE_HEIGHT 
     },
-    .color = RED,
+    .color = MAGENTA,
     .speed = PADDLE_SPEED,
     .direction = {0}
   };
@@ -203,7 +209,7 @@ static GameContext game_init(const CmdConfig *p_cfg) {
       .width = BALL_SIDES, 
       .height = BALL_SIDES
     },
-    .color = BLUE,
+    .color = SKYBLUE,
     .speed = BALL_SPEED,
     .spin_factor = 0.f,
     .direction = {
@@ -454,35 +460,31 @@ static void draw_score(GameContext *ctx, float dt) {
   DrawText(buf, score_center_x, (WINDOW_HEIGHT - score_font_size) / 2, score_font_size, color);
 }
 
-#define MAX_TAIL_SIZE 15
 
-static void draw_tail(GameContext *ctx, Vector2 tail[MAX_TAIL_SIZE], size_t *p_begin, size_t *p_len) {
+static void draw_tail(GameContext *ctx, Rectangle orig_rect, Color orig_color,
+                      Vector2 *p_tail, int *p_begin, int *p_len, int tail_capacity) {
   if (!ctx->is_paused) {
-    tail[*p_begin] = (Vector2){ ctx->ball.rect.x + ctx->ball.rect.width / 2, ctx->ball.rect.y + ctx->ball.rect.height / 2 };
-    *p_begin = (*p_begin + 1) % MAX_TAIL_SIZE;
-    *p_len += *p_len != MAX_TAIL_SIZE;
+    p_tail[*p_begin] = (Vector2){ orig_rect.x + orig_rect.width / 2, orig_rect.y + orig_rect.height / 2 };
+    *p_begin = (*p_begin + 1) % tail_capacity;
+    *p_len += *p_len != tail_capacity;
   }
 
-  size_t step = MAX_TAIL_SIZE / 5;
+  int step = tail_capacity / 5;
 
   for (
-    size_t curr = *p_begin, i = 0; 
+    int curr = *p_begin, i = 0; 
     i < *p_len; 
-    curr = (curr + step) % MAX_TAIL_SIZE, i += step
+    curr = (curr + step) % tail_capacity, i += step
   ) {
-    Color color = ctx->ball.color;
-    color.a = Lerp(color.a, 0, 1 - (float)i / MAX_TAIL_SIZE);
-    float w = Lerp(ctx->ball.rect.width, ctx->ball.rect.width / MAX_TAIL_SIZE, 1 - (float)i / MAX_TAIL_SIZE);
-    float h = Lerp(ctx->ball.rect.height, ctx->ball.rect.height / MAX_TAIL_SIZE, 1 - (float)i / MAX_TAIL_SIZE);
-    DrawRectangleLines(tail[curr].x - w / 2, tail[curr].y - h / 2, w, h, color);
+    Color color = orig_color;
+    color.a = Lerp(color.a, 0, 1 - (float)i / tail_capacity);
+    float w = Lerp(orig_rect.width, orig_rect.width / tail_capacity, 1 - (float)i / tail_capacity);
+    float h = Lerp(orig_rect.height, orig_rect.height / tail_capacity, 1 - (float)i / tail_capacity);
+    DrawRectangleLines(p_tail[curr].x - w / 2, p_tail[curr].y - h / 2, w, h, color);
   }
 }
 
 static void game_draw_frame(GameContext *ctx, float dt) {
-  static Vector2 tail[MAX_TAIL_SIZE] = {0};
-  static size_t tail_begin = 0;
-  static size_t tail_len = 0;
-
   Rectangle middle_line = {0};
   middle_line.width = 5;
   middle_line.height = WINDOW_HEIGHT;
@@ -501,7 +503,18 @@ static void game_draw_frame(GameContext *ctx, float dt) {
   DrawRectangleLinesEx(ctx->paddles[1].rect, line_thickness, ctx->paddles[1].color);
   DrawRectangleLinesEx(ctx->ball.rect, line_thickness, ctx->ball.color);
 
-  draw_tail(ctx, tail, &tail_begin, &tail_len);
+  draw_tail(ctx, ctx->ball.rect, ctx->ball.color, 
+            ctx->ball.tail, &ctx->ball.tail_begin, &ctx->ball.tail_len, TAIL_CAPACITY_BALL);
+
+  if (ctx->paddles[0].direction.y != 0) {
+    draw_tail(ctx, ctx->paddles[0].rect, ctx->paddles[0].color, 
+              ctx->paddles[0].tail, &ctx->paddles[0].tail_begin, &ctx->paddles[0].tail_len, TAIL_CAPACITY_PADDLE);
+  }
+
+  if (ctx->paddles[1].direction.y != 0) {
+    draw_tail(ctx, ctx->paddles[1].rect, ctx->paddles[1].color, 
+              ctx->paddles[1].tail, &ctx->paddles[1].tail_begin, &ctx->paddles[1].tail_len, TAIL_CAPACITY_PADDLE);
+  }
 
   game_draw_ui(ctx, dt);
   
