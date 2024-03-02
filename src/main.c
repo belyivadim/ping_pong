@@ -21,13 +21,15 @@
 
 #define PADDLE_HEIGHT (int)(WINDOW_SIDE / 2.67f)
 #define PADDLE_WIDTH (int)(WINDOW_SIDE / 13.33)
-#define MAX_PADDLE_SPEED (int)(WINDOW_SIDE / 0.29f)
+#define MAX_PADDLE_SPEED (int)(WINDOW_SIDE / 0.39f)
 #define MIN_PADDLE_SPEED (int)(WINDOW_SIDE / 0.57f)
 #define PADDLE_SPEED (int)(WINDOW_SIDE / 0.5f)
+#define PADDLE_ACCELERATION 25.f
+#define PADDLE_FRICTION (PADDLE_ACCELERATION / 4)
 
 #define BALL_SPEED (int)(WINDOW_SIDE / 0.44f)
 #define MAX_BALL_SPEED (int)(WINDOW_SIDE / 0.22f)
-#define MIN_BALL_SPEED BALL_SPEED
+#define MIN_BALL_SPEED (int)(WINDOW_SIDE / 0.60f)
 #define BALL_SIDES (int)(WINDOW_SIDE / 13.33f)
 
 #define TAIL_CAPACITY_BALL 15
@@ -40,8 +42,8 @@
 typedef struct {
   Rectangle rect;
   Color color;
-  float speed;
-  Vector2 direction;
+  float velocity;
+  float acceleration;
   TAIL_STRUCT(TAIL_CAPACITY_PADDLE);
 } Paddle;
 
@@ -102,10 +104,10 @@ static void handle_collision(Ball *p_ball, Paddle *p_paddle) {
   float ball_speed_factor = 1.0f;
   float reflection_angle = 0.f;
 
-  bool are_opposite_Y_directions = (p_ball->direction.y * p_paddle->direction.y) < 0.f
-    || (p_ball->direction.y == 0 && p_paddle->direction.y != 0)
-    || (p_ball->direction.y != 0 && p_paddle->direction.y == 0);
-  float speed_diff = fabsf(p_ball->speed - p_paddle->speed);
+  bool are_opposite_Y_directions = (p_ball->direction.y * p_paddle->velocity) < 0.f
+    || (p_ball->direction.y == 0 && p_paddle->velocity != 0)
+    || (p_ball->direction.y != 0 && p_paddle->velocity == 0);
+  float speed_diff = fabsf(p_ball->speed - fabsf(p_paddle->velocity));
   p_ball->spin_factor = 0.020f * (powf(speed_diff, 0.5f) + 0.5f) * are_opposite_Y_directions;
   p_ball->direction = Vector2Rotate(p_ball->direction, -p_ball->spin_factor);
 
@@ -117,17 +119,10 @@ static void handle_collision(Ball *p_ball, Paddle *p_paddle) {
   }
 
   if (collision_point_abs <= p_paddle->rect.height * 0.35f) {
-    reflection_angle = collision_point / (p_paddle->rect.height * 0.25f) * 0.2f * !!p_paddle->direction.y;
+    reflection_angle = collision_point / (p_paddle->rect.height * 0.25f) * 0.2f * !!p_paddle->velocity;
   } else {
-    reflection_angle = collision_point / (p_paddle->rect.height * 0.75f) * 0.2f * !!p_paddle->direction.y;
+    reflection_angle = collision_point / (p_paddle->rect.height * 0.75f) * 0.2f * !!p_paddle->velocity;
   }
-
-  if (0 == collision_point_abs || collision_point_abs <= p_paddle->rect.height * 0.15f) {
-    p_paddle->speed = Clamp(p_paddle->speed + 50, MIN_PADDLE_SPEED, MAX_PADDLE_SPEED);
-  } else if (collision_point_abs > p_paddle->rect.height * 0.25f) {
-    p_paddle->speed = Clamp(p_paddle->speed - 50, MIN_PADDLE_SPEED, MAX_PADDLE_SPEED);
-  }
-
 
   p_ball->speed = Clamp(p_ball->speed * ball_speed_factor, MIN_BALL_SPEED, MAX_BALL_SPEED);
   p_ball->direction = Vector2Rotate(p_ball->direction, reflection_angle);
@@ -136,9 +131,9 @@ static void handle_collision(Ball *p_ball, Paddle *p_paddle) {
 
 static void handle_pressed_key(GameContext *ctx, int key_index) {
   switch (ctx->pressed_key[key_index]) {
-    case 0: ctx->paddles[key_index].direction.y = 0; break;
-    case KEY_DOWN: ctx->paddles[key_index].direction.y = 1; break;
-    case KEY_UP: ctx->paddles[key_index].direction.y = -1; break;
+    case 0: ctx->paddles[key_index].acceleration = 0; break;
+    case KEY_DOWN: ctx->paddles[key_index].acceleration = PADDLE_ACCELERATION; break;
+    case KEY_UP: ctx->paddles[key_index].acceleration = -PADDLE_ACCELERATION; break;
   }
 }
 
@@ -147,32 +142,32 @@ static void handle_input(GameContext *ctx, float dt) {
 
   if (IsKeyReleased(KEY_DOWN) || IsKeyReleased(KEY_UP)) {
     ctx->pressed_key[1] = 0;
-    ctx->paddles[1].direction.y = 0;
+    ctx->paddles[1].acceleration = 0;
   }
 
   if (IsKeyReleased(KEY_W) || IsKeyReleased(KEY_S)) {
     ctx->pressed_key[0] = 0;
-    ctx->paddles[0].direction.y = 0;
+    ctx->paddles[0].acceleration = 0;
   }
 
   if (IsKeyDown(KEY_S)) {
     ctx->pressed_key[0] = KEY_DOWN;
-    ctx->paddles[0].direction.y = 1;
+    ctx->paddles[0].acceleration = PADDLE_ACCELERATION;
   }
 
   if (IsKeyDown(KEY_W)) {
     ctx->pressed_key[0] = KEY_UP;
-    ctx->paddles[0].direction.y = -1;
+    ctx->paddles[0].acceleration = -PADDLE_ACCELERATION;
   }
 
   if (IsKeyDown(KEY_DOWN)) {
     ctx->pressed_key[1] = KEY_DOWN;
-    ctx->paddles[1].direction.y = 1;
+    ctx->paddles[1].acceleration = PADDLE_ACCELERATION;
   }
 
   if (IsKeyDown(KEY_UP)) {
     ctx->pressed_key[1] = KEY_UP;
-    ctx->paddles[1].direction.y = -1;
+    ctx->paddles[1].acceleration = -PADDLE_ACCELERATION;
   }
 }
 
@@ -186,8 +181,6 @@ static GameContext game_init(const CmdConfig *p_cfg) {
       .height = PADDLE_HEIGHT 
     },
     .color = SKYBLUE,
-    .speed = PADDLE_SPEED,
-    .direction = {0}
   };
 
   Paddle p2 = {
@@ -198,8 +191,6 @@ static GameContext game_init(const CmdConfig *p_cfg) {
       .height = PADDLE_HEIGHT 
     },
     .color = MAGENTA,
-    .speed = PADDLE_SPEED,
-    .direction = {0}
   };
 
   Ball b = {
@@ -362,12 +353,36 @@ static void game_host_update(GameContext *ctx, float dt) {
   net_send_position(&ctx->client_sock, GE_BALL, ctx->ball.rect.x, ctx->ball.rect.y);
 }
 
+static void update_paddle(Paddle *p_paddle, float dt) {
+  float friction = 0;
+
+  if (p_paddle->velocity > 0) {
+    friction = PADDLE_FRICTION;
+  } else if (p_paddle->velocity < 0) {
+    friction = -PADDLE_FRICTION;
+  }
+
+  float prev_velocity = p_paddle->velocity;
+  p_paddle->velocity += (p_paddle->acceleration - friction) * dt;
+
+  p_paddle->velocity = Clamp(p_paddle->velocity, -MAX_PADDLE_SPEED * dt, MAX_PADDLE_SPEED * dt);
+  if ((p_paddle->velocity > 0 && prev_velocity < 0) || (p_paddle->velocity < 0 && prev_velocity > 0)
+    || (p_paddle->rect.y <= 0 && p_paddle->acceleration < 0) 
+    || (p_paddle->rect.y >= WINDOW_HEIGHT - p_paddle->rect.height && p_paddle->acceleration > 0)) {
+    p_paddle->velocity = 0.f;
+  }
+
+  p_paddle->rect.y += p_paddle->velocity;
+}
+
 static void game_local_update(GameContext *ctx, float dt) {
   if (ctx->ball.rect.x >= WINDOW_WIDTH - ctx->ball.rect.width) {
     ctx->scores[0] += 1;
 
     ctx->paddles[0].rect.y = (float)WINDOW_HEIGHT / 2 - (float)PADDLE_HEIGHT / 2;
     ctx->paddles[1].rect.y = (float)WINDOW_HEIGHT / 2 - (float)PADDLE_HEIGHT / 2;
+    ctx->paddles[0].tail_len = 0;
+    ctx->paddles[1].tail_len = 0;
 
     ctx->ball.rect.x = ctx->paddles[0].rect.x + PADDLE_WIDTH;
     ctx->ball.rect.y = ctx->paddles[0].rect.y + ctx->paddles[0].rect.height / 2 - (float)BALL_SIDES / 2;
@@ -376,6 +391,7 @@ static void game_local_update(GameContext *ctx, float dt) {
     ctx->ball.color = ctx->paddles[0].color;
     ctx->ball.speed = BALL_SPEED;
     ctx->ball.spin_factor = 0.f;
+    ctx->ball.tail_len = 0;
   }
 
   if (ctx->ball.rect.x <= 0) {
@@ -383,6 +399,8 @@ static void game_local_update(GameContext *ctx, float dt) {
 
     ctx->paddles[0].rect.y = (float)WINDOW_HEIGHT / 2 - (float)PADDLE_HEIGHT / 2;
     ctx->paddles[1].rect.y = (float)WINDOW_HEIGHT / 2 - (float)PADDLE_HEIGHT / 2;
+    ctx->paddles[0].tail_len = 0;
+    ctx->paddles[1].tail_len = 0;
 
     ctx->ball.rect.x = ctx->paddles[1].rect.x - PADDLE_WIDTH;
     ctx->ball.rect.y = ctx->paddles[1].rect.y + ctx->paddles[1].rect.height / 2 - (float)BALL_SIDES / 2;
@@ -391,6 +409,7 @@ static void game_local_update(GameContext *ctx, float dt) {
     ctx->ball.color = ctx->paddles[1].color;
     ctx->ball.speed = BALL_SPEED;
     ctx->ball.spin_factor = 0.f;
+    ctx->ball.tail_len = 0;
   }
 
   if (ctx->ball.rect.y <= 0 || ctx->ball.rect.y >= WINDOW_HEIGHT - ctx->ball.rect.height) {
@@ -408,12 +427,14 @@ static void game_local_update(GameContext *ctx, float dt) {
     ctx->ball.rect.x = ctx->paddles[1].rect.x - ctx->paddles[1].rect.width; // Move ball to avoid sticking
   }
 
-  ctx->paddles[0].rect.y += ctx->paddles[0].speed * ctx->paddles[0].direction.y * dt;
-  ctx->paddles[1].rect.y += ctx->paddles[1].speed * ctx->paddles[1].direction.y * dt;
 
+  update_paddle(&ctx->paddles[0], dt);
+  update_paddle(&ctx->paddles[1], dt);
+  
   ctx->ball.direction = Vector2Normalize(ctx->ball.direction);
   ctx->ball.rect.x += ctx->ball.speed * ctx->ball.direction.x * dt;
   ctx->ball.rect.y += ctx->ball.speed * ctx->ball.direction.y * dt;
+  ctx->ball.speed = Clamp(ctx->ball.speed - .5f, MIN_BALL_SPEED, MAX_BALL_SPEED);
 
   clamp_rect_within_screen(&ctx->paddles[0].rect);
   clamp_rect_within_screen(&ctx->paddles[1].rect);
@@ -424,15 +445,15 @@ static void game_draw_ui(GameContext *ctx, float dt) {
   char buf[1024] = {0};
   int stats_font_size = 14;
 
-  sprintf(buf, "Speed: %.0f", ctx->paddles[0].speed);
+  sprintf(buf, "Speed: %.2f", fabsf(ctx->paddles[0].velocity));
   DrawText(buf, 30, WINDOW_HEIGHT - 30, stats_font_size, MAIN_UI_COLOR);
 
-  sprintf(buf, "Speed: %.0f", ctx->paddles[1].speed);
+  sprintf(buf, "Speed: %.2f", fabsf(ctx->paddles[1].velocity));
   int speed1_width = MeasureText(buf, stats_font_size);
   int speed1_pos_x = WINDOW_WIDTH - speed1_width - 30;
   DrawText(buf, speed1_pos_x, WINDOW_HEIGHT - 30, stats_font_size, MAIN_UI_COLOR);
 
-  sprintf(buf, "Ball Speed: %.0f", ctx->ball.speed);
+  sprintf(buf, "Ball Speed: %.2f", ctx->ball.speed *  dt);
   int ball_speed_width = MeasureText(buf, stats_font_size);
   int ball_center_x = (WINDOW_WIDTH - ball_speed_width) / 2;
   DrawText(buf, ball_center_x, WINDOW_HEIGHT - 30, stats_font_size, MAIN_UI_COLOR);
@@ -506,12 +527,12 @@ static void game_draw_frame(GameContext *ctx, float dt) {
   draw_tail(ctx, ctx->ball.rect, ctx->ball.color, 
             ctx->ball.tail, &ctx->ball.tail_begin, &ctx->ball.tail_len, TAIL_CAPACITY_BALL);
 
-  if (ctx->paddles[0].direction.y != 0) {
+  if (fabsf(ctx->paddles[0].velocity) != 0) {
     draw_tail(ctx, ctx->paddles[0].rect, ctx->paddles[0].color, 
               ctx->paddles[0].tail, &ctx->paddles[0].tail_begin, &ctx->paddles[0].tail_len, TAIL_CAPACITY_PADDLE);
   }
 
-  if (ctx->paddles[1].direction.y != 0) {
+  if (fabsf(ctx->paddles[1].velocity) != 0) {
     draw_tail(ctx, ctx->paddles[1].rect, ctx->paddles[1].color, 
               ctx->paddles[1].tail, &ctx->paddles[1].tail_begin, &ctx->paddles[1].tail_len, TAIL_CAPACITY_PADDLE);
   }
