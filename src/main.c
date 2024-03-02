@@ -29,7 +29,7 @@
 
 #define BALL_SPEED (int)(WINDOW_SIDE / 0.44f)
 #define MAX_BALL_SPEED (int)(WINDOW_SIDE / 0.22f)
-#define MIN_BALL_SPEED BALL_SPEED
+#define MIN_BALL_SPEED (int)(WINDOW_SIDE / 0.60f)
 #define BALL_SIDES (int)(WINDOW_SIDE / 13.33f)
 
 #define TAIL_CAPACITY_BALL 15
@@ -123,12 +123,6 @@ static void handle_collision(Ball *p_ball, Paddle *p_paddle) {
   } else {
     reflection_angle = collision_point / (p_paddle->rect.height * 0.75f) * 0.2f * !!p_paddle->velocity;
   }
-
-  //if (0 == collision_point_abs || collision_point_abs <= p_paddle->rect.height * 0.15f) {
-  //  p_paddle->speed = Clamp(p_paddle->speed + 50, MIN_PADDLE_SPEED, MAX_PADDLE_SPEED);
-  //} else if (collision_point_abs > p_paddle->rect.height * 0.25f) {
-  //  p_paddle->speed = Clamp(p_paddle->speed - 50, MIN_PADDLE_SPEED, MAX_PADDLE_SPEED);
-  //}
 
   p_ball->speed = Clamp(p_ball->speed * ball_speed_factor, MIN_BALL_SPEED, MAX_BALL_SPEED);
   p_ball->direction = Vector2Rotate(p_ball->direction, reflection_angle);
@@ -372,7 +366,9 @@ static void update_paddle(Paddle *p_paddle, float dt) {
   p_paddle->velocity += (p_paddle->acceleration - friction) * dt;
 
   p_paddle->velocity = Clamp(p_paddle->velocity, -MAX_PADDLE_SPEED * dt, MAX_PADDLE_SPEED * dt);
-  if ((p_paddle->velocity > 0 && prev_velocity < 0) || (p_paddle->velocity < 0 && prev_velocity > 0)) {
+  if ((p_paddle->velocity > 0 && prev_velocity < 0) || (p_paddle->velocity < 0 && prev_velocity > 0)
+    || (p_paddle->rect.y <= 0 && p_paddle->acceleration < 0) 
+    || (p_paddle->rect.y >= WINDOW_HEIGHT - p_paddle->rect.height && p_paddle->acceleration > 0)) {
     p_paddle->velocity = 0.f;
   }
 
@@ -381,19 +377,21 @@ static void update_paddle(Paddle *p_paddle, float dt) {
 
 static void game_local_update(GameContext *ctx, float dt) {
   if (ctx->ball.rect.x >= WINDOW_WIDTH - ctx->ball.rect.width) {
-    ctx->ball.direction.x *= -1;
-    //ctx->scores[0] += 1;
+    ctx->scores[0] += 1;
 
-    //ctx->paddles[0].rect.y = (float)WINDOW_HEIGHT / 2 - (float)PADDLE_HEIGHT / 2;
-    //ctx->paddles[1].rect.y = (float)WINDOW_HEIGHT / 2 - (float)PADDLE_HEIGHT / 2;
+    ctx->paddles[0].rect.y = (float)WINDOW_HEIGHT / 2 - (float)PADDLE_HEIGHT / 2;
+    ctx->paddles[1].rect.y = (float)WINDOW_HEIGHT / 2 - (float)PADDLE_HEIGHT / 2;
+    ctx->paddles[0].tail_len = 0;
+    ctx->paddles[1].tail_len = 0;
 
-    //ctx->ball.rect.x = ctx->paddles[0].rect.x + PADDLE_WIDTH;
-    //ctx->ball.rect.y = ctx->paddles[0].rect.y + ctx->paddles[0].rect.height / 2 - (float)BALL_SIDES / 2;
-    //ctx->ball.direction.x = 1;
-    //ctx->ball.direction.y = 0.f;
-    //ctx->ball.color = ctx->paddles[0].color;
-    //ctx->ball.speed = BALL_SPEED;
-    //ctx->ball.spin_factor = 0.f;
+    ctx->ball.rect.x = ctx->paddles[0].rect.x + PADDLE_WIDTH;
+    ctx->ball.rect.y = ctx->paddles[0].rect.y + ctx->paddles[0].rect.height / 2 - (float)BALL_SIDES / 2;
+    ctx->ball.direction.x = 1;
+    ctx->ball.direction.y = 0.f;
+    ctx->ball.color = ctx->paddles[0].color;
+    ctx->ball.speed = BALL_SPEED;
+    ctx->ball.spin_factor = 0.f;
+    ctx->ball.tail_len = 0;
   }
 
   if (ctx->ball.rect.x <= 0) {
@@ -401,6 +399,8 @@ static void game_local_update(GameContext *ctx, float dt) {
 
     ctx->paddles[0].rect.y = (float)WINDOW_HEIGHT / 2 - (float)PADDLE_HEIGHT / 2;
     ctx->paddles[1].rect.y = (float)WINDOW_HEIGHT / 2 - (float)PADDLE_HEIGHT / 2;
+    ctx->paddles[0].tail_len = 0;
+    ctx->paddles[1].tail_len = 0;
 
     ctx->ball.rect.x = ctx->paddles[1].rect.x - PADDLE_WIDTH;
     ctx->ball.rect.y = ctx->paddles[1].rect.y + ctx->paddles[1].rect.height / 2 - (float)BALL_SIDES / 2;
@@ -409,6 +409,7 @@ static void game_local_update(GameContext *ctx, float dt) {
     ctx->ball.color = ctx->paddles[1].color;
     ctx->ball.speed = BALL_SPEED;
     ctx->ball.spin_factor = 0.f;
+    ctx->ball.tail_len = 0;
   }
 
   if (ctx->ball.rect.y <= 0 || ctx->ball.rect.y >= WINDOW_HEIGHT - ctx->ball.rect.height) {
@@ -433,6 +434,7 @@ static void game_local_update(GameContext *ctx, float dt) {
   ctx->ball.direction = Vector2Normalize(ctx->ball.direction);
   ctx->ball.rect.x += ctx->ball.speed * ctx->ball.direction.x * dt;
   ctx->ball.rect.y += ctx->ball.speed * ctx->ball.direction.y * dt;
+  ctx->ball.speed = Clamp(ctx->ball.speed - .5f, MIN_BALL_SPEED, MAX_BALL_SPEED);
 
   clamp_rect_within_screen(&ctx->paddles[0].rect);
   clamp_rect_within_screen(&ctx->paddles[1].rect);
