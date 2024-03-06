@@ -26,6 +26,7 @@
 #define PADDLE_SPEED (int)(WINDOW_SIDE / 0.5f)
 #define PADDLE_ACCELERATION 25.f
 #define PADDLE_FRICTION (PADDLE_ACCELERATION / 4)
+#define PADDLE_HIT_EFFECT_DURATION .25f
 
 #define BALL_SPEED (int)(WINDOW_SIDE / 0.44f)
 #define MAX_BALL_SPEED (int)(WINDOW_SIDE / 0.22f)
@@ -45,6 +46,9 @@ typedef struct {
   float velocity;
   float acceleration;
   TAIL_STRUCT(TAIL_CAPACITY_PADDLE);
+
+  Rectangle hit_effect[3];
+  float hit_countdown;
 } Paddle;
 
 typedef struct {
@@ -83,6 +87,7 @@ typedef struct {
   int host_port;
 } CmdConfig;
 
+Sound hit_sound;
 
 static void game_local_update(GameContext *ctx, float dt);
 static void game_client_update(GameContext *ctx, float dt);
@@ -126,6 +131,18 @@ static void handle_collision(Ball *p_ball, Paddle *p_paddle) {
 
   p_ball->speed = Clamp(p_ball->speed * ball_speed_factor, MIN_BALL_SPEED, MAX_BALL_SPEED);
   p_ball->direction = Vector2Rotate(p_ball->direction, reflection_angle);
+
+  // effects
+  PlaySound(hit_sound);
+  p_paddle->hit_countdown = PADDLE_HIT_EFFECT_DURATION;
+  for (int i = 0; i < 3; ++i) {
+    p_paddle->hit_effect[i] = CLITERAL(Rectangle){
+      .x = p_paddle->rect.x - 2 * (i + 1),
+      .y = p_paddle->rect.y - 2 * (i + 1),
+      .width = p_paddle->rect.width + 4 * (i + 1),
+      .height = p_paddle->rect.height + 4 * (i + 1),
+    };
+  }
 }
 
 
@@ -172,6 +189,7 @@ static void handle_input(GameContext *ctx, float dt) {
 }
 
 static GameContext game_init(const CmdConfig *p_cfg) {
+  hit_sound = LoadSound("resources/shoot-small_4.wav");
 
   Paddle p1 = {
     .rect = { 
@@ -537,6 +555,16 @@ static void game_draw_frame(GameContext *ctx, float dt) {
               ctx->paddles[1].tail, &ctx->paddles[1].tail_begin, &ctx->paddles[1].tail_len, TAIL_CAPACITY_PADDLE);
   }
 
+  for (int i = 0; i < 2; ++i) {
+    if (ctx->paddles[i].hit_countdown > 0) {
+      int effect_amount = ceil((1 - ctx->paddles[i].hit_countdown / PADDLE_HIT_EFFECT_DURATION) * 3 + .01);
+      for (int j = 0; j < effect_amount; ++j) {
+        DrawRectangleLinesEx(ctx->paddles[i].hit_effect[j], 1, ctx->paddles[i].color);
+      }
+      ctx->paddles[i].hit_countdown -= dt;
+    } 
+  }
+
   game_draw_ui(ctx, dt);
   
   EndDrawing();
@@ -557,6 +585,7 @@ int main(int argc, char **argv)
 
   //SetTargetFPS(60);
   InitWindow(WINDOW_WIDTH, WINDOW_HEIGHT, window_name);
+  InitAudioDevice();
 
   GameContext ctx = game_init(&config);
 
@@ -574,6 +603,8 @@ int main(int argc, char **argv)
     game_draw_frame(&ctx, dt);
   }
 
+  UnloadSound(hit_sound);
+  CloseAudioDevice();
   CloseWindow();
 
   return 0;
