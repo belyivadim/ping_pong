@@ -37,8 +37,11 @@
 #define TAIL_CAPACITY_PADDLE 24
 #define TAIL_STRUCT(size) Vector2 tail[(size)]; int tail_begin; int tail_len
 
+#define WIN_SCORE_MAX 21
+
 #define BACKGROUND_COLOR CLITERAL(Color){ 30, 20, 40, 255 }// CLITERAL(Color){ 0, 37, 14, 255 }
 #define MAIN_UI_COLOR PURPLE
+#define SECOND_UI_COLOR PINK
 
 typedef struct {
   Rectangle rect;
@@ -60,6 +63,15 @@ typedef struct {
   TAIL_STRUCT(TAIL_CAPACITY_BALL);
 } Ball;
 
+
+typedef enum {
+  MAIN_MENU_NULL,
+  MAIN_MENU_START,
+  MAIN_MENU_WIN_SCORE,
+  MAIN_MENU_EXIT,
+  MAIN_MENU_ITEMS_COUNT
+} MainMenuState;
+
 typedef struct GameContext GameContext;
 typedef void (*UpdateFn)(GameContext *ctx, float dt);
 
@@ -67,12 +79,16 @@ struct GameContext {
   Paddle paddles[2];
   Ball ball;
   int scores[2];
+  int win_score;
+  MainMenuState main_menu_state;
   UpdateFn update;
   UdpSocket server_sock;
   UdpSocket client_sock;
   int pressed_key[2];
   bool is_paused;
+  bool should_exit;
 };
+
 
 typedef enum {
   GAME_LOCAL,
@@ -89,10 +105,13 @@ typedef struct {
 
 Sound hit_sound;
 
+static void main_menu_update(GameContext *ctx, float dt);
 static void game_local_update(GameContext *ctx, float dt);
 static void game_client_update(GameContext *ctx, float dt);
 static void game_host_pending_update(GameContext *ctx, float dt);
 static void game_host_update(GameContext *ctx, float dt);
+static void game_draw_frame(GameContext *ctx, float dt);
+void game_fini(GameContext *ctx);
 
 
 static void clamp_rect_within_screen(Rectangle *p_rect) {
@@ -188,7 +207,11 @@ static void handle_input(GameContext *ctx, float dt) {
   }
 }
 
-static GameContext game_init(const CmdConfig *p_cfg) {
+static GameContext game_init(const CmdConfig *p_cfg, const char *window_name) {
+  SetTargetFPS(60);
+  InitWindow(WINDOW_WIDTH, WINDOW_HEIGHT, window_name);
+  InitAudioDevice();
+
   hit_sound = LoadSound("resources/shoot-small_4.wav");
 
   Paddle p1 = {
@@ -232,7 +255,7 @@ static GameContext game_init(const CmdConfig *p_cfg) {
   UdpSocket client_sock = {0};
 
   switch (p_cfg->game_kind) {
-    case GAME_LOCAL: update = game_local_update; break;
+    case GAME_LOCAL: update = main_menu_update; break;
     case GAME_NETWORK_CLIENT: {
       update = game_client_update; 
       if (!connect_to_host_udp(p_cfg->host_addr, p_cfg->host_port, &client_sock)) {
@@ -254,10 +277,14 @@ static GameContext game_init(const CmdConfig *p_cfg) {
     .paddles = {p1, p2},
     .ball = b,
     .scores = {0},
+    .win_score = 11,
     .update = update,
     .server_sock = server_sock,
     .client_sock = client_sock,
     .pressed_key = {0},
+    .main_menu_state = MAIN_MENU_START,
+    .is_paused = false,
+    .should_exit = false,
   };
 
   return ctx;
@@ -338,10 +365,14 @@ static void game_client_update(GameContext *ctx, float dt) {
       default: TraceLog(LOG_WARNING, "Client got unknown message"); try_recieve = false;
     }
   }
+
+  game_draw_frame(ctx, dt);
 }
 
 static void game_host_pending_update(GameContext *ctx, float dt) {
   assert(ctx->client_sock.fd == 0 && "Client already has been connected");
+
+  game_draw_frame(ctx, dt);
 
   if (!net_check_for_connection(&ctx->server_sock, &ctx->client_sock)) {
     DrawText("Pending for a connection", WINDOW_WIDTH / 2 - 250, WINDOW_HEIGHT / 2 - 20, 40, RED);
@@ -369,6 +400,8 @@ static void game_host_update(GameContext *ctx, float dt) {
   net_send_position(&ctx->client_sock, GE_PADDLE_1, ctx->paddles[0].rect.x, ctx->paddles[0].rect.y);
   net_send_position(&ctx->client_sock, GE_PADDLE_2, ctx->paddles[1].rect.x, ctx->paddles[1].rect.y);
   net_send_position(&ctx->client_sock, GE_BALL, ctx->ball.rect.x, ctx->ball.rect.y);
+
+  game_draw_frame(ctx, dt);
 }
 
 static void update_paddle(Paddle *p_paddle, float dt) {
@@ -394,69 +427,88 @@ static void update_paddle(Paddle *p_paddle, float dt) {
 }
 
 static void game_local_update(GameContext *ctx, float dt) {
-  if (ctx->ball.rect.x >= WINDOW_WIDTH - ctx->ball.rect.width) {
-    ctx->scores[0] += 1;
+  if (!ctx->is_paused) {
 
-    ctx->paddles[0].rect.y = (float)WINDOW_HEIGHT / 2 - (float)PADDLE_HEIGHT / 2;
-    ctx->paddles[1].rect.y = (float)WINDOW_HEIGHT / 2 - (float)PADDLE_HEIGHT / 2;
-    ctx->paddles[0].tail_len = 0;
-    ctx->paddles[1].tail_len = 0;
+    if (ctx->ball.rect.x >= WINDOW_WIDTH - ctx->ball.rect.width) {
+      ctx->scores[0] += 1; 
 
-    ctx->ball.rect.x = ctx->paddles[0].rect.x + PADDLE_WIDTH;
-    ctx->ball.rect.y = ctx->paddles[0].rect.y + ctx->paddles[0].rect.height / 2 - (float)BALL_SIDES / 2;
-    ctx->ball.direction.x = 1;
-    ctx->ball.direction.y = 0.f;
-    ctx->ball.color = ctx->paddles[0].color;
-    ctx->ball.speed = BALL_SPEED;
-    ctx->ball.spin_factor = 0.f;
-    ctx->ball.tail_len = 0;
+      ctx->paddles[0].rect.y = (float)WINDOW_HEIGHT / 2 - (float)PADDLE_HEIGHT / 2;
+      ctx->paddles[1].rect.y = (float)WINDOW_HEIGHT / 2 - (float)PADDLE_HEIGHT / 2;
+      ctx->paddles[0].tail_len = 0;
+      ctx->paddles[1].tail_len = 0;
+
+      ctx->ball.rect.x = ctx->paddles[0].rect.x + PADDLE_WIDTH;
+      ctx->ball.rect.y = ctx->paddles[0].rect.y + ctx->paddles[0].rect.height / 2 - (float)BALL_SIDES / 2;
+      ctx->ball.direction.x = 1;
+      ctx->ball.direction.y = 0.f;
+      ctx->ball.color = ctx->paddles[0].color;
+      ctx->ball.speed = BALL_SPEED;
+      ctx->ball.spin_factor = 0.f;
+      ctx->ball.tail_len = 0;
+
+      if (ctx->scores[0] >= ctx->win_score) {
+        ctx->update = main_menu_update;
+        ctx->scores[0] = 0;
+        ctx->scores[1] = 0;
+        return;
+      }
+    }
+
+    if (ctx->ball.rect.x <= 0) {
+      ctx->scores[1] += 1; 
+
+      ctx->paddles[0].rect.y = (float)WINDOW_HEIGHT / 2 - (float)PADDLE_HEIGHT / 2;
+      ctx->paddles[1].rect.y = (float)WINDOW_HEIGHT / 2 - (float)PADDLE_HEIGHT / 2;
+      ctx->paddles[0].tail_len = 0;
+      ctx->paddles[1].tail_len = 0;
+
+      ctx->ball.rect.x = ctx->paddles[1].rect.x - PADDLE_WIDTH;
+      ctx->ball.rect.y = ctx->paddles[1].rect.y + ctx->paddles[1].rect.height / 2 - (float)BALL_SIDES / 2;
+      ctx->ball.direction.x = -1;
+      ctx->ball.direction.y = 0.f;
+      ctx->ball.color = ctx->paddles[1].color;
+      ctx->ball.speed = BALL_SPEED;
+      ctx->ball.spin_factor = 0.f;
+      ctx->ball.tail_len = 0;
+
+      if (ctx->scores[1] >= ctx->win_score) {
+        ctx->update = main_menu_update;
+        ctx->scores[0] = 0;
+        ctx->scores[1] = 0;
+        return;
+      }
+    }
+
+    if (ctx->ball.rect.y <= 0 || ctx->ball.rect.y >= WINDOW_HEIGHT - ctx->ball.rect.height) {
+      ctx->ball.direction.y *= -1;
+      ctx->ball.speed = Clamp(ctx->ball.speed * 0.9f, MIN_BALL_SPEED, MAX_BALL_SPEED);
+    }
+
+    if (CheckCollisionRecs(ctx->ball.rect, ctx->paddles[0].rect)) {
+      handle_collision(&ctx->ball, &ctx->paddles[0]);
+      ctx->ball.rect.x = ctx->paddles[0].rect.x + ctx->paddles[0].rect.width; // Move ball to avoid sticking
+    }
+
+    if (CheckCollisionRecs(ctx->ball.rect, ctx->paddles[1].rect)) {
+      handle_collision(&ctx->ball, &ctx->paddles[1]);
+      ctx->ball.rect.x = ctx->paddles[1].rect.x - ctx->paddles[1].rect.width; // Move ball to avoid sticking
+    }
+
+
+    update_paddle(&ctx->paddles[0], dt);
+    update_paddle(&ctx->paddles[1], dt);
+    
+    ctx->ball.direction = Vector2Normalize(ctx->ball.direction);
+    ctx->ball.rect.x += ctx->ball.speed * ctx->ball.direction.x * dt;
+    ctx->ball.rect.y += ctx->ball.speed * ctx->ball.direction.y * dt;
+    ctx->ball.speed = Clamp(ctx->ball.speed - .5f, MIN_BALL_SPEED, MAX_BALL_SPEED);
+
+    clamp_rect_within_screen(&ctx->paddles[0].rect);
+    clamp_rect_within_screen(&ctx->paddles[1].rect);
+    clamp_rect_within_screen(&ctx->ball.rect);
   }
 
-  if (ctx->ball.rect.x <= 0) {
-    ctx->scores[1] += 1;
-
-    ctx->paddles[0].rect.y = (float)WINDOW_HEIGHT / 2 - (float)PADDLE_HEIGHT / 2;
-    ctx->paddles[1].rect.y = (float)WINDOW_HEIGHT / 2 - (float)PADDLE_HEIGHT / 2;
-    ctx->paddles[0].tail_len = 0;
-    ctx->paddles[1].tail_len = 0;
-
-    ctx->ball.rect.x = ctx->paddles[1].rect.x - PADDLE_WIDTH;
-    ctx->ball.rect.y = ctx->paddles[1].rect.y + ctx->paddles[1].rect.height / 2 - (float)BALL_SIDES / 2;
-    ctx->ball.direction.x = -1;
-    ctx->ball.direction.y = 0.f;
-    ctx->ball.color = ctx->paddles[1].color;
-    ctx->ball.speed = BALL_SPEED;
-    ctx->ball.spin_factor = 0.f;
-    ctx->ball.tail_len = 0;
-  }
-
-  if (ctx->ball.rect.y <= 0 || ctx->ball.rect.y >= WINDOW_HEIGHT - ctx->ball.rect.height) {
-    ctx->ball.direction.y *= -1;
-    ctx->ball.speed = Clamp(ctx->ball.speed * 0.9f, MIN_BALL_SPEED, MAX_BALL_SPEED);
-  }
-
-  if (CheckCollisionRecs(ctx->ball.rect, ctx->paddles[0].rect)) {
-    handle_collision(&ctx->ball, &ctx->paddles[0]);
-    ctx->ball.rect.x = ctx->paddles[0].rect.x + ctx->paddles[0].rect.width; // Move ball to avoid sticking
-  }
-
-  if (CheckCollisionRecs(ctx->ball.rect, ctx->paddles[1].rect)) {
-    handle_collision(&ctx->ball, &ctx->paddles[1]);
-    ctx->ball.rect.x = ctx->paddles[1].rect.x - ctx->paddles[1].rect.width; // Move ball to avoid sticking
-  }
-
-
-  update_paddle(&ctx->paddles[0], dt);
-  update_paddle(&ctx->paddles[1], dt);
-  
-  ctx->ball.direction = Vector2Normalize(ctx->ball.direction);
-  ctx->ball.rect.x += ctx->ball.speed * ctx->ball.direction.x * dt;
-  ctx->ball.rect.y += ctx->ball.speed * ctx->ball.direction.y * dt;
-  ctx->ball.speed = Clamp(ctx->ball.speed - .5f, MIN_BALL_SPEED, MAX_BALL_SPEED);
-
-  clamp_rect_within_screen(&ctx->paddles[0].rect);
-  clamp_rect_within_screen(&ctx->paddles[1].rect);
-  clamp_rect_within_screen(&ctx->ball.rect);
+  game_draw_frame(ctx, dt);
 }
 
 static void game_draw_ui(GameContext *ctx, float dt) {
@@ -479,6 +531,11 @@ static void game_draw_ui(GameContext *ctx, float dt) {
   sprintf(buf, "FPS: %d", GetFPS());
   int fps_width = MeasureText(buf, stats_font_size);
   DrawText(buf, WINDOW_WIDTH - fps_width - 60, 30, stats_font_size, MAIN_UI_COLOR);
+
+  sprintf(buf, "Win score: %d", ctx->win_score);
+  int win_score_width = MeasureText(buf, stats_font_size);
+  DrawText(buf, win_score_width - 60, 30, stats_font_size, MAIN_UI_COLOR);
+
 }
 
 static void draw_score(GameContext *ctx, float dt) {
@@ -570,6 +627,83 @@ static void game_draw_frame(GameContext *ctx, float dt) {
   EndDrawing();
 }
 
+void main_menu_update(GameContext *ctx, float dt) {
+  const char *start_text = "START";
+  Color start_color = MAIN_UI_COLOR;
+
+  const char *set_win_score_fmt = "WIN SCORE: %d";
+  char set_win_score_buf[64] = {0};
+  Color set_win_score_color = MAIN_UI_COLOR;
+
+  const char *exit_text = "EXIT";
+  Color exit_color = MAIN_UI_COLOR;
+
+  int font_size = 40;
+
+  if (IsKeyPressed(KEY_UP) || IsKeyPressed(KEY_W)) {
+    ctx->main_menu_state -= 1;
+    if (ctx->main_menu_state == MAIN_MENU_NULL) ctx->main_menu_state = MAIN_MENU_EXIT;
+  } else if (IsKeyPressed(KEY_DOWN) || IsKeyPressed(KEY_S)) {
+    ctx->main_menu_state += 1;
+    if (ctx->main_menu_state == MAIN_MENU_ITEMS_COUNT) ctx->main_menu_state = MAIN_MENU_START;
+  }
+
+  switch (ctx->main_menu_state) {
+    case MAIN_MENU_START: {
+      start_color = SECOND_UI_COLOR;
+      if (IsKeyPressed(KEY_ENTER)) {
+        ctx->update= game_local_update;
+      }
+    } break;
+
+    case MAIN_MENU_WIN_SCORE: {
+      set_win_score_color = SECOND_UI_COLOR;
+      if (IsKeyPressed(KEY_RIGHT) || IsKeyPressed(KEY_D)) {
+        ctx->win_score += 1;
+        if (ctx->win_score > WIN_SCORE_MAX) ctx->win_score = WIN_SCORE_MAX;
+      }
+
+      if (IsKeyPressed(KEY_LEFT) || IsKeyPressed(KEY_A)) {
+        ctx->win_score -= 1;
+        if (ctx->win_score <= 0) ctx->win_score = 1;
+      }
+    } break;
+
+    case MAIN_MENU_EXIT: {
+      exit_color = SECOND_UI_COLOR;
+      if (IsKeyPressed(KEY_ENTER)) {
+        ctx->should_exit = true;
+      }
+    } break;
+
+    default: break;
+  }
+
+
+  BeginDrawing();
+  ClearBackground(BACKGROUND_COLOR);
+
+  int item_width = MeasureText(start_text, font_size);
+  int item_center_x = (WINDOW_WIDTH - item_width) / 2;
+  DrawText(start_text, item_center_x, WINDOW_HEIGHT / 2 - 20 - 60, font_size, start_color);
+
+  sprintf(set_win_score_buf, set_win_score_fmt, ctx->win_score);
+  item_width = MeasureText(set_win_score_buf, font_size);
+  item_center_x = (WINDOW_WIDTH - item_width) / 2;
+  DrawText(set_win_score_buf, item_center_x, WINDOW_HEIGHT / 2 - 20, font_size, set_win_score_color);
+
+  item_width = MeasureText(exit_text, font_size);
+  item_center_x = (WINDOW_WIDTH - item_width) / 2;
+  DrawText(exit_text, item_center_x, WINDOW_HEIGHT / 2 - 20 + 60, font_size, exit_color);
+
+  EndDrawing();
+}
+
+void game_fini(GameContext *ctx) {
+  UnloadSound(hit_sound);
+  CloseAudioDevice();
+  CloseWindow();
+}
 
 int main(int argc, char **argv)
 {
@@ -582,30 +716,21 @@ int main(int argc, char **argv)
     case GAME_NETWORK_CLIENT: window_name = "PingPong (Client)"; break;
   }
   assert(NULL != window_name);
+ 
+  GameContext ctx = game_init(&config, window_name);
 
-  //SetTargetFPS(60);
-  InitWindow(WINDOW_WIDTH, WINDOW_HEIGHT, window_name);
-  InitAudioDevice();
-
-  GameContext ctx = game_init(&config);
-
-  while (!WindowShouldClose()) {
+  while (!WindowShouldClose() && !ctx.should_exit) {
     float dt = GetFrameTime();
 
     if (IsKeyPressed(KEY_SPACE)) {
       ctx.is_paused = !ctx.is_paused;
     } 
 
-    if (!ctx.is_paused) {
-      handle_input(&ctx, dt);
-      ctx.update(&ctx, dt);
-    }
-    game_draw_frame(&ctx, dt);
+    handle_input(&ctx, dt);
+    ctx.update(&ctx, dt);
   }
 
-  UnloadSound(hit_sound);
-  CloseAudioDevice();
-  CloseWindow();
+  game_fini(&ctx);
 
   return 0;
 }
